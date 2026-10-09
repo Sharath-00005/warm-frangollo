@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#232323">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="PF Attendance">
+<title>Public Force Attendance</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><div class="top-in">
+  <img class="logo" alt="Public Force Security Services" src="logo.jpg">
+  <div class="ttl"><b>Public Force</b><span>Attendance</span></div>
+  <div class="who" id="who"></div>
+</div></header>
+<main id="app"><div class="card muted"><span class="spin"></span> Loading…</div></main>
+<nav class="nav" id="nav" hidden><div class="nav-in" id="navIn"></div></nav>
+
+<div class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-label="Capture attendance">
+  <div class="sh-head"><h2 id="shTitle">Check in</h2><button class="x" id="shClose" aria-label="Close">✕</button></div>
+  <div class="cam" id="cam">
+    <video id="vid" playsinline muted autoplay></video>
+    <img id="shot" alt="Your captured selfie" hidden>
+    <div class="oval" id="oval"></div>
+    <div class="msg" id="camMsg" hidden></div>
+  </div>
+  <div class="sh-foot">
+    <div class="chips"><span class="chip" id="locChip">Locating…</span><span class="chip" id="siteChip" hidden></span></div>
+    <button class="shutter" id="btnShutter" aria-label="Take selfie"></button>
+    <div class="row" id="reviewBtns" hidden>
+      <button class="btn grow" id="btnRetake">Retake</button>
+      <button class="btn pri grow" id="btnSubmit">Confirm</button>
+    </div>
+    <button class="linkbtn" id="btnLocRetry" hidden>Retry location</button>
+    <button class="linkbtn" id="btnFile">Use phone camera app instead</button>
+    <input type="file" id="fileIn" accept="image/*" capture="user" hidden>
+    <p class="sh-err" id="shErr" role="alert"></p>
+  </div>
+</div>
+<div class="modal" id="modal" hidden><div class="modal-in" id="modalIn"></div></div>
+<div class="lb" id="lb" hidden><img id="lbImg" alt="Selfie"><div id="lbCap"></div><button class="btn" id="lbClose">Close</button></div>
+<div class="toast" id="toast" hidden></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
