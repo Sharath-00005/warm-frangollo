@@ -6,6 +6,7 @@ const dkeyLocal=(d=new Date())=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(
 const fmtT=ms=>ms?new Date(ms).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}):'—';
 const fmtD=k=>new Date(k+'T00:00:00').toLocaleDateString([], {weekday:'short',day:'numeric',month:'short'});
 const fmtDur=(a,b)=>{if(!a||!b)return '';const m=Math.max(0,Math.round((b-a)/60000));return Math.floor(m/60)+'h '+pad(m%60)+'m';};
+const fmtHM=m=>Math.floor(m/60)+'h '+pad(m%60)+'m';
 const fmtDist=m=>m<1000?Math.round(m)+' m':(m/1000).toFixed(1)+' km';
 const mapUrl=e=>'https://www.google.com/maps?q='+e.lat+','+e.lng;
 function hav(a,b,c,d){const R=6371000,t=x=>x*Math.PI/180,dl=t(c-a),dg=t(d-b);const h=Math.sin(dl/2)**2+Math.cos(t(a))*Math.cos(t(c))*Math.sin(dg/2)**2;return 2*R*Math.asin(Math.sqrt(h));}
@@ -25,7 +26,7 @@ const S={user:null,booting:true,fatal:'',cfg:{sites:[],blockOutside:false,mySite
   recs:null,recsLoading:false,tab:'mark',loginErr:'',setup:false,photos:{},photoAt:0,
   flt:{user:'',from:dkeyLocal(new Date(Date.now()-6*864e5)),to:dkeyLocal()},
   siteForm:{name:'',lat:'',lng:'',radius:150},
-  nu:{empCode:'',name:'',designation:'',role:'employee',siteId:''},bulk:{lines:'',siteId:''},purgeDays:90,exporting:false};
+  nu:{empCode:'',name:'',designation:'',role:'employee',siteId:''},bulk:{lines:'',siteId:''},purgeDays:90,exporting:false,sum:null,sumLoading:false,sumMonth:dkeyLocal().slice(0,7),bsh:{site:'',start:'08:00',end:'20:00'},graceEdit:null};
 let sb=null,sbTmp=null;
 const isAdmin=()=>S.user&&S.user.role==='admin';
 
@@ -64,11 +65,11 @@ const ms=t=>t?Date.parse(t):null;
 function mapRow(r){
   const ci={t:ms(r.in_at),lat:r.in_lat,lng:r.in_lng,acc:r.in_acc,site:r.in_site,dist:r.in_dist,inside:r.in_inside,photo:r.in_photo};
   const co=r.out_at?{t:ms(r.out_at),lat:r.out_lat,lng:r.out_lng,acc:r.out_acc,site:r.out_site,dist:r.out_dist,inside:r.out_inside,photo:r.out_photo}:null;
-  const o={id:r.id,date:r.work_date,checkIn:ci,checkOut:co,manual:!!r.out_manual};
+  const o={id:r.id,date:r.work_date,checkIn:ci,checkOut:co,manual:!!r.out_manual,inNote:r.in_note,outNote:r.out_note,lateMin:r.late_min,earlyMin:r.early_min};
   if(r.profiles){o.name=r.profiles.name;o.empCode=r.profiles.emp_code;o.userId=r.user_id;}
   return o;
 }
-function mapProfile(p){return {id:p.id,empCode:p.emp_code,name:p.name,designation:p.designation,role:p.role,siteId:p.site_id,active:p.active,mustChange:p.must_change};}
+function mapProfile(p){return {id:p.id,empCode:p.emp_code,name:p.name,designation:p.designation,role:p.role,siteId:p.site_id,active:p.active,mustChange:p.must_change,shiftStart:p.shift_start?String(p.shift_start).slice(0,5):null,shiftEnd:p.shift_end?String(p.shift_end).slice(0,5):null};}
 async function signPhotos(rows){
   if(Date.now()-S.photoAt>45*60000){S.photos={};S.photoAt=Date.now();}
   const need=[];
@@ -138,11 +139,12 @@ function thumb(e,label,who){
 }
 function recRow(r,adminView){
   const i=r.checkIn,o=r.checkOut,who=adminView?r.name:(S.user&&S.user.name);
-  const stale=!o&&S.todayKey&&r.date!==S.todayKey;
+  const stale=!o&&S.todayKey&&r.date!==S.todayKey,g=S.cfg.graceMin==null?10:S.cfg.graceMin;
   return `<div class="rec"><div class="thumbs">${thumb(i,'IN',who)}${thumb(o,'OUT',who)}</div>
   <div class="rec-b"><b>${adminView?esc(r.name)+' <span class="muted small">'+esc(r.empCode)+'</span>':fmtD(r.date)}</b>
   <span class="small muted">${adminView?fmtD(r.date)+' · ':''}${fmtT(i.t)} → ${o?fmtT(o.t)+' · '+fmtDur(i.t,o.t):'<b>on duty</b>'}</span>
-  <div class="chips">${chipFor(i)}${o?chipFor(o):''}${r.manual?'<span class="chip warn">Closed by admin</span>':''}${i.lat!=null?`<a class="map" href="${mapUrl(i)}" target="_blank" rel="noopener">Map ↗</a>`:''}</div>
+  <div class="chips">${chipFor(i)}${o?chipFor(o):''}${r.manual?'<span class="chip warn">Closed by admin</span>':''}${r.lateMin>g?'<span class="chip warn">Late '+r.lateMin+'m</span>':''}${r.earlyMin>g?'<span class="chip warn">Left '+r.earlyMin+'m early</span>':''}${i.lat!=null?`<a class="map" href="${mapUrl(i)}" target="_blank" rel="noopener">Map ↗</a>`:''}</div>
+  ${r.inNote?'<div class="small" style="margin-top:.3rem">📝 In: '+esc(r.inNote)+'</div>':''}${r.outNote?'<div class="small" style="margin-top:.2rem">📝 Out: '+esc(r.outNote)+'</div>':''}
   ${adminView&&!o?`<button class="btn sm" style="margin-top:.4rem" data-closeid="${r.id}">${stale?'Close old shift':'Close shift'}</button>`:''}</div></div>`;
 }
 function viewMark(){
@@ -153,6 +155,7 @@ function viewMark(){
   const mySite=S.cfg.mySiteId?S.cfg.sites.find(s=>s.id===S.cfg.mySiteId):null;
   let h='';
   if(fo)h+=`<div class="banner small" style="background:var(--panel);color:var(--fg)">🚶 <b>Field officer:</b> you can check in at any work site. Check in when you arrive and check out when you leave.</div>`;
+  if(S.cfg.shiftStart&&S.cfg.shiftEnd)h+=`<div class="banner small" style="background:var(--panel);color:var(--fg)">🕒 Your shift: <b>${S.cfg.shiftStart} – ${S.cfg.shiftEnd}</b></div>`;
   if(mySite)h+=`<div class="banner small" style="background:var(--panel);color:var(--fg)">📍 Assigned site: <b>${esc(mySite.name)}</b></div>`;
   h+=`<div class="hero"><div class="date">${now.toLocaleDateString([], {weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
   <div class="clock" id="clk">${now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</div>
@@ -172,15 +175,16 @@ function viewMark(){
 }
 function viewToday(){
   if(!S.today)return '<div class="card muted"><span class="spin"></span> Loading team…</div>';
-  const list=S.today.people,c={on:0,done:0,none:0};list.forEach(p=>c[p.status]++);
+  const list=S.today.people,c={on:0,done:0,none:0},g=S.cfg.graceMin==null?10:S.cfg.graceMin,od=list.filter(p=>p.overdue!=null).length;list.forEach(p=>c[p.status]++);
   let h=`<div class="stats"><div class="stat"><b>${list.length}</b><span>Total</span></div><div class="stat"><b>${c.on}</b><span>On duty</span></div><div class="stat"><b>${c.done}</b><span>Done</span></div><div class="stat"><b>${c.none}</b><span>Absent</span></div></div>
   <div class="card"><div class="row"><h3 class="grow" style="margin:0">Team today</h3><button class="btn sm" data-act="refresh">Refresh</button></div>`;
   if(!list.length)h+='<p class="muted">No employees yet. Add them in the Team tab.</p>';
+  if(od)h=h.replace('<div class="card">',`<div class="banner bad"><b>${od} not arrived</b> — past their shift start time.</div><div class="card">`);
   h+=list.map(p=>{
     const cls=p.status==='on'?'ok':p.status==='done'?'warn':'bad',txt=p.status==='on'?(p.stale?'Open shift':'On duty'):p.status==='done'?'Completed':'Not marked';
     return `<button class="emp" data-emp="${esc(p.id)}"><div class="avatar">${esc((p.name||'?')[0].toUpperCase())}</div>
     <div class="grow" style="min-width:0"><b>${esc(p.name)}</b><div class="small muted">${esc(p.empCode)}${p.role==='field_officer'?' · Field officer'+(p.visits?' · '+p.visits+' visit'+(p.visits===1?'':'s'):'')+(p.status==='on'&&p.curSite?' · At '+esc(p.curSite):''):(p.site?' · '+esc(p.site):'')}${p.inAt?' · In '+fmtT(p.inAt):''}${p.outAt?' · Out '+fmtT(p.outAt):''}</div></div>
-    <div style="text-align:right"><span class="chip ${cls}">${txt}</span>${p.inside===false?'<div><span class="chip bad" style="margin-top:.2rem">Off site</span></div>':''}</div></button>`;}).join('');
+    <div style="text-align:right"><span class="chip ${p.overdue!=null?'bad':cls}">${p.overdue!=null?'Not arrived · '+p.overdue+'m late':txt}</span>${p.lateMin>g&&p.status!=='none'?'<div><span class="chip warn" style="margin-top:.2rem">Late '+p.lateMin+'m</span></div>':''}${p.inside===false?'<div><span class="chip bad" style="margin-top:.2rem">Off site</span></div>':''}</div></button>`;}).join('');
   return h+'</div>';
 }
 function viewRecs(){
@@ -190,11 +194,22 @@ function viewRecs(){
   <div class="row"><div class="grow"><label class="f" for="ff">From</label><input type="date" id="ff" data-flt="from" value="${S.flt.from}"></div><div class="grow"><label class="f" for="ft">To</label><input type="date" id="ft" data-flt="to" value="${S.flt.to}"></div></div>
   <div class="row" style="margin-top:.9rem"><button class="btn pri grow" data-act="search">Show records</button>
   <button class="btn grow" data-act="export" ${S.exporting?'disabled':''}>${S.exporting?'Preparing…':'⬇ Export CSV'}</button></div></div>`;
+  h+=summaryCard();
   h+='<div class="card"><h3>Results</h3>';
   if(S.recsLoading)h+='<p class="muted"><span class="spin"></span> Loading…</p>';
   else if(!S.recs)h+='<p class="muted">Choose filters and tap “Show records”.</p>';
   else if(!S.recs.length)h+='<p class="muted">No records found.</p>';
   else h+=S.recs.map(r=>recRow(r,true)).join('')+(S.recs.length>=100?'<p class="muted small">Showing the latest 100. Narrow the dates or export CSV for everything.</p>':'');
+  return h+'</div>';
+}
+function summaryCard(){
+  let h=`<div class="card"><h3>Monthly summary</h3><label class="f" for="sm">Month</label><input type="month" id="sm" data-sum="month" value="${esc(S.sumMonth)}">
+  <div class="row" style="margin-top:.9rem"><button class="btn pri grow" data-act="sumshow">Show summary</button>${S.sum?'<button class="btn grow" data-act="sumcsv">⬇ Summary CSV</button>':''}</div>`;
+  if(S.sumLoading)h+='<p class="muted"><span class="spin"></span> Loading…</p>';
+  else if(S.sum){
+    h+=`<p class="muted small">${esc(S.sum.from)} to ${esc(S.sum.to)} (${S.sum.days} days). “No record” counts days with no attendance, so it includes weekly offs and leave.</p><div style="overflow-x:auto"><table class="t"><tr><th>Name</th><th>Present</th><th>No record</th><th>Late</th><th>Early</th><th>Hours</th></tr>`+
+    S.sum.people.map(p=>`<tr><td>${esc(p.name)}<div class="small muted">${esc(p.empCode)}${p.role==='field_officer'?' · Field':''}</div></td><td>${p.daysPresent}${p.role==='field_officer'&&p.visits?' ('+p.visits+' visits)':''}</td><td>${Math.max(0,S.sum.days-p.daysPresent)}</td><td>${p.late}</td><td>${p.early}</td><td>${fmtHM(p.minutes)}${p.open?' <span class="chip warn">'+p.open+' open</span>':''}</td></tr>`).join('')+'</table></div>';
+  }
   return h+'</div>';
 }
 function siteOpts(sel){return '<option value="">Any site</option>'+S.cfg.sites.map(s=>`<option value="${s.id}" ${String(s.id)===String(sel==null?'':sel)?'selected':''}>${esc(s.name)}</option>`).join('');}
@@ -211,14 +226,19 @@ function viewTeam(){
   <textarea data-bulk="lines" placeholder="PF1001, Ravi Kumar, Security Guard&#10;PF1002, Suresh N, Supervisor">${esc(S.bulk.lines)}</textarea>
   <label class="f" for="bs">Assign all to site</label><select id="bs" data-bulk="siteId">${siteOpts(S.bulk.siteId)}</select>
   <button class="btn" style="width:100%;margin-top:.9rem" data-act="bulkadd">Create accounts</button></div>
+  <div class="card"><h3>Set shift for many</h3><p class="muted small">Sets the same shift for all employees at a site (field officers are not included). Night shifts work too, for example 20:00 to 08:00.</p>
+  <label class="f" for="bsite">Employees at</label><select id="bsite" data-bsh="site"><option value="">All sites (all employees)</option>${S.cfg.sites.map(s=>`<option value="${s.id}" ${String(s.id)===String(S.bsh.site)?'selected':''}>${esc(s.name)}</option>`).join('')}</select>
+  <div class="row"><div class="grow"><label class="f" for="bs1">Shift starts</label><input type="time" id="bs1" data-bsh="start" value="${esc(S.bsh.start)}"></div><div class="grow"><label class="f" for="bs2">Shift ends</label><input type="time" id="bs2" data-bsh="end" value="${esc(S.bsh.end)}"></div></div>
+  <button class="btn" style="width:100%;margin-top:.9rem" data-act="applyshift">Apply shift</button></div>
   <div class="card"><h3>Employees${users?' ('+users.length+')':''}</h3>`;
   if(!users)h+='<p class="muted"><span class="spin"></span> Loading…</p>';
   else h+=users.map(u=>`<div class="ur"><div class="avatar">${esc((u.name||'?')[0].toUpperCase())}</div>
     <div class="grow" style="min-width:140px"><b>${esc(u.name)}</b> ${u.role==='admin'?'<span class="chip warn">Admin</span>':''}${u.role==='field_officer'?'<span class="chip">Field officer</span>':''}${u.active?'':' <span class="chip bad">Inactive</span>'}
-    <div class="small muted">${esc(u.empCode)}${u.designation?' · '+esc(u.designation):''}</div></div>
+    <div class="small muted">${esc(u.empCode)}${u.designation?' · '+esc(u.designation):''}${u.shiftStart?' · 🕒 '+u.shiftStart+'–'+u.shiftEnd:''}</div></div>
     ${u.role==='employee'?`<select data-usite="${esc(u.id)}" aria-label="Site for ${esc(u.name)}">${siteOpts(u.siteId)}</select>`:''}
     ${u.role!=='admin'?`<select data-urole="${esc(u.id)}" aria-label="Role for ${esc(u.name)}"><option value="employee" ${u.role==='employee'?'selected':''}>Employee</option><option value="field_officer" ${u.role==='field_officer'?'selected':''}>Field officer</option></select>`:''}
     <button class="btn sm" data-reset="${esc(u.id)}">Reset password</button>
+    ${u.role==='employee'?`<button class="btn sm" data-shift="${esc(u.id)}">Shift</button>`:''}
     ${u.id!==S.user.id?`<button class="btn sm ${u.active?'bad':''}" data-toggle="${esc(u.id)}" data-active="${u.active?1:0}">${u.active?'Deactivate':'Activate'}</button>`:''}</div>`).join('');
   return h+'</div>';
 }
@@ -232,6 +252,9 @@ function viewSettings(){
   <div class="row"><div class="grow"><label class="f" for="sa">Latitude</label><input id="sa" data-sf="lat" inputmode="decimal" value="${esc(f.lat)}"></div><div class="grow"><label class="f" for="so">Longitude</label><input id="so" data-sf="lng" inputmode="decimal" value="${esc(f.lng)}"></div></div>
   <label class="f" for="sr">Radius (metres)</label><input id="sr" data-sf="radius" inputmode="numeric" value="${esc(f.radius)}">
   <div class="row" style="margin-top:.9rem"><button class="btn grow" data-act="usehere">📍 Use my location</button><button class="btn pri grow" data-act="addsite">Add site</button></div><p class="formerr" id="siteErr"></p></div>
+  <div class="card"><h3>Late rule</h3><p class="muted small">A guard is marked late only if they check in more than this many minutes after shift start. The same grace applies to leaving early.</p>
+  <label class="f" for="gr">Grace period (minutes)</label><input id="gr" data-grace="1" inputmode="numeric" value="${esc(S.graceEdit==null?(S.cfg.graceMin==null?10:S.cfg.graceMin):S.graceEdit)}">
+  <button class="btn" style="width:100%;margin-top:.9rem" data-act="savegrace">Save</button></div>
   <div class="card"><h3>Free up photo space</h3><p class="muted small">The free plan has about 1 GB for selfies. This deletes old selfie photos but keeps the attendance records (times, places, hours).</p>
   <label class="f" for="pd">Delete photos older than (days)</label><input id="pd" data-purge="1" inputmode="numeric" value="${esc(S.purgeDays)}">
   <button class="btn bad" style="width:100%;margin-top:.9rem" data-act="purge">Delete old photos</button></div>`;
@@ -271,6 +294,7 @@ function openSheet(mode){
   $('#shTitle').textContent=mode==='in'?'Check in':'Check out';
   $('#sheet').hidden=false;document.body.style.overflow='hidden';
   setReview(false);$('#shErr').textContent='';
+  $('#noteIn').value='';$('#noteIn').placeholder=mode==='out'?(S.user.role==='field_officer'?'Visit note (optional), e.g. what you checked':'Note (optional)'):'Remark (optional)';
   startLoc();startCam();
 }
 function closeSheet(){stopCam();$('#sheet').hidden=true;document.body.style.overflow='';}
@@ -351,9 +375,10 @@ async function submitMark(){
     path=u.id+'/'+Date.now()+'_'+Math.random().toString(36).slice(2,8)+'.jpg';
     const up=await sb.storage.from('selfies').upload(path,blob,{contentType:'image/jpeg',upsert:false});
     if(up.error)throw new Error(friendly(up.error));
-    const r=await rpc('pf_mark',{p_kind:SH.mode,p_lat:SH.pos.lat,p_lng:SH.pos.lng,p_acc:SH.pos.acc,p_photo:path,p_device:(navigator.userAgent||'').slice(0,120)});
+    const r=await rpc('pf_mark',{p_kind:SH.mode,p_lat:SH.pos.lat,p_lng:SH.pos.lng,p_acc:SH.pos.acc,p_photo:path,p_device:(navigator.userAgent||'').slice(0,120),p_note:($('#noteIn').value||'').trim().slice(0,300)||null});
     path=null;
-    closeSheet();toast((SH.mode==='in'?'Checked in at ':'Checked out at ')+fmtT(r.time));
+    const gm=S.cfg.graceMin==null?10:S.cfg.graceMin;
+    closeSheet();toast((SH.mode==='in'?'Checked in at ':'Checked out at ')+fmtT(r.time)+(SH.mode==='in'&&r.lateMin>gm?' · '+r.lateMin+' min late':'')+(SH.mode==='out'&&r.earlyMin>gm?' · '+r.earlyMin+' min early':''));
     await Promise.all([loadConfig(),loadStatus()]);draw();
   }catch(e){
     if(path){try{await sb.storage.from('selfies').remove([path]);}catch(_){}}
@@ -364,7 +389,7 @@ async function submitMark(){
 }
 
 /* ---------- data loading ---------- */
-async function loadConfig(){try{const c=await rpc('pf_config');S.cfg={sites:c.sites||[],blockOutside:!!c.blockOutside,mySiteId:c.mySiteId};S.todayKey=c.today;}catch(e){toast(friendly(e));}}
+async function loadConfig(){try{const c=await rpc('pf_config');S.cfg={sites:c.sites||[],blockOutside:!!c.blockOutside,mySiteId:c.mySiteId,graceMin:c.graceMin==null?10:c.graceMin,shiftStart:c.shiftStart,shiftEnd:c.shiftEnd};S.todayKey=c.today;}catch(e){toast(friendly(e));}}
 async function loadStatus(){
   try{
     const rows=await qry(sb.from('attendance').select('*').eq('user_id',S.user.id).order('in_at',{ascending:false}).limit(30));
@@ -424,6 +449,21 @@ async function createAccount(f,invite){
   }
   return tmp;
 }
+async function loadSummary(){
+  const [y,m]=S.sumMonth.split('-').map(Number);
+  if(!y||!m){toast('Choose a month');return;}
+  const from=S.sumMonth+'-01',to=S.sumMonth+'-'+pad(new Date(y,m,0).getDate());
+  S.sumLoading=true;S.sum=null;draw();
+  try{S.sum=await rpc('pf_admin_monthly',{p_from:from,p_to:to});}catch(e){toast(friendly(e));}
+  S.sumLoading=false;draw();
+}
+function sumCsv(){
+  if(!S.sum)return;
+  const out=[['Employee ID','Name','Role','Site','Shift','Days present','No-record days','Visits','Late (over grace)','Early exit (over grace)','Total hours','Open shifts','Closed by admin']];
+  S.sum.people.forEach(p=>out.push([p.empCode,p.name,p.role==='field_officer'?'Field officer':'Employee',p.site||'',p.shiftStart?p.shiftStart+'-'+p.shiftEnd:'',p.daysPresent,Math.max(0,S.sum.days-p.daysPresent),p.visits,p.late,p.early,(p.minutes/60).toFixed(2),p.open,p.manual]));
+  const csv='\ufeff'+out.map(r=>r.map(v=>{v=v==null?'':String(v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;}).join(',')).join('\n');
+  downloadBlob(new Blob([csv],{type:'text/csv'}),'monthly_summary_'+S.sum.from.slice(0,7)+'.csv');
+}
 async function exportCsv(){
   if(S.exporting)return;S.exporting=true;draw();
   try{
@@ -435,8 +475,8 @@ async function exportCsv(){
     }
     const fm=t=>{if(!t)return '';const d=new Date(t);return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());};
     const yn=v=>v==null?'':v?'Yes':'No';
-    const out=[['Date','Employee ID','Employee','Designation','Role','Check-in','Check-out','Hours','In site','In on-site','In distance (m)','In lat','In lng','In accuracy (m)','Out site','Out on-site','Out lat','Out lng','Closed by admin']];
-    rows.forEach(r=>{const p=r.profiles||{};out.push([r.work_date,p.emp_code,p.name,p.designation,p.role==='field_officer'?'Field officer':p.role==='admin'?'Admin':'Employee',fm(r.in_at),fm(r.out_at),r.out_at?((Date.parse(r.out_at)-Date.parse(r.in_at))/3600000).toFixed(2):'',r.in_site,yn(r.in_inside),r.in_dist,r.in_lat,r.in_lng,r.in_acc,r.out_site,yn(r.out_inside),r.out_lat,r.out_lng,r.out_manual?'Yes':'']);});
+    const out=[['Date','Employee ID','Employee','Designation','Role','Check-in','Check-out','Hours','In site','In on-site','In distance (m)','In lat','In lng','In accuracy (m)','Out site','Out on-site','Out lat','Out lng','Closed by admin','Late (min)','Early exit (min)','In note','Out note']];
+    rows.forEach(r=>{const p=r.profiles||{};out.push([r.work_date,p.emp_code,p.name,p.designation,p.role==='field_officer'?'Field officer':p.role==='admin'?'Admin':'Employee',fm(r.in_at),fm(r.out_at),r.out_at?((Date.parse(r.out_at)-Date.parse(r.in_at))/3600000).toFixed(2):'',r.in_site,yn(r.in_inside),r.in_dist,r.in_lat,r.in_lng,r.in_acc,r.out_site,yn(r.out_inside),r.out_lat,r.out_lng,r.out_manual?'Yes':'',r.late_min,r.early_min,r.in_note,r.out_note]);});
     const csv='\ufeff'+out.map(r=>r.map(v=>{v=v==null?'':String(v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;}).join(',')).join('\n');
     downloadBlob(new Blob([csv],{type:'text/csv'}),'attendance_'+S.flt.from+'_to_'+S.flt.to+'.csv');
     toast(rows.length+' records exported');
@@ -499,13 +539,19 @@ document.addEventListener('submit',async e=>{
   }catch(err){toast(friendly(err));}
 });
 document.addEventListener('click',async e=>{
-  const t=e.target.closest('[data-tab],[data-act],[data-emp],[data-lb],[data-delsite],[data-reset],[data-toggle],[data-closeid],[data-dlcsv]');
+  const t=e.target.closest('[data-tab],[data-act],[data-emp],[data-lb],[data-delsite],[data-reset],[data-toggle],[data-closeid],[data-dlcsv],[data-shift]');
   if(!t)return;
   const d=t.dataset;
   try{
     if(d.tab){enterTab(d.tab);return;}
     if(d.emp){S.flt.user=d.emp;S.tab='recs';draw();window.scrollTo(0,0);if(!S.users)await loadUsers();loadRecs();return;}
     if(d.lb){$('#lbImg').src=S.photos[d.lb]||'';$('#lbCap').textContent=d.cap||'';$('#lb').hidden=false;return;}
+    if(d.shift){
+      const u=(S.users||[]).find(x=>x.id===d.shift);if(!u)return;
+      openModal(`<h3>Shift: ${esc(u.name)}</h3><p class="muted small">Night shifts work too, for example 20:00 to 08:00.</p>
+      <label class="f" for="shs">Starts</label><input type="time" id="shs" value="${u.shiftStart||'08:00'}">
+      <label class="f" for="she">Ends</label><input type="time" id="she" value="${u.shiftEnd||'20:00'}">
+      <p class="formerr" id="shErr2"></p><div class="row" style="margin-top:.6rem"><button class="btn grow" data-act="clearshift" data-id="${esc(u.id)}">No shift</button><button class="btn pri grow" data-act="saveshift" data-id="${esc(u.id)}">Save</button></div>`);return;}
     if(d.delsite){if(!confirm('Remove this site?'))return;await rpc('pf_admin_site_delete',{p_id:+d.delsite});await loadConfig();draw();return;}
     if(d.reset){
       if(!confirm('Reset this employee\'s password? They will be signed out.'))return;
@@ -533,6 +579,23 @@ document.addEventListener('click',async e=>{
     else if(a==='search')loadRecs();
     else if(a==='export')exportCsv();
     else if(a==='purge')await purgePhotos();
+    else if(a==='sumshow')await loadSummary();
+    else if(a==='sumcsv')sumCsv();
+    else if(a==='saveshift'){
+      try{await rpc('pf_admin_set_shift',{p_user:d.id,p_start:$('#shs').value,p_end:$('#she').value});closeModal();await loadUsers();draw();toast('Shift saved');}
+      catch(x){$('#shErr2').textContent=friendly(x);}
+    }
+    else if(a==='clearshift'){await rpc('pf_admin_set_shift',{p_user:d.id,p_start:null,p_end:null});closeModal();await loadUsers();draw();toast('Shift cleared');}
+    else if(a==='applyshift'){
+      if(!S.bsh.start||!S.bsh.end){toast('Set the start and end time');return;}
+      const n=await rpc('pf_admin_set_shift_bulk',{p_site:S.bsh.site?+S.bsh.site:null,p_start:S.bsh.start,p_end:S.bsh.end});
+      await loadUsers();draw();toast('Shift set for '+n+' employee'+(n===1?'':'s'));
+    }
+    else if(a==='savegrace'){
+      const g=parseInt(S.graceEdit==null?S.cfg.graceMin:S.graceEdit,10);
+      if(!(g>=0&&g<=120)){toast('Enter a number from 0 to 120');return;}
+      await rpc('pf_admin_set_grace',{p_min:g});S.cfg.graceMin=g;S.graceEdit=null;draw();toast('Saved');
+    }
     else if(a==='doclose'){
       const v=$('#cdt').value;if(!v){$('#cErr').textContent='Pick a time.';return;}
       try{await rpc('pf_admin_close_shift',{p_id:+d.id,p_out:new Date(v).toISOString()});closeModal();toast('Shift closed');loadRecs();}
@@ -590,6 +653,9 @@ document.addEventListener('input',e=>{
   if(d.nu)S.nu[d.nu]=t.value;
   if(d.bulk)S.bulk[d.bulk]=t.value;
   if(d.purge)S.purgeDays=t.value;
+  if(d.bsh)S.bsh[d.bsh]=t.value;
+  if(d.sum)S.sumMonth=t.value;
+  if(d.grace)S.graceEdit=t.value;
   if(d.flt)S.flt[d.flt]=t.value;
 });
 document.addEventListener('change',async e=>{
