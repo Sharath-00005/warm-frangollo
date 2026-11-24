@@ -13,6 +13,7 @@ function hav(a,b,c,d){const R=6371000,t=x=>x*Math.PI/180,dl=t(c-a),dg=t(d-b);con
 const CODE_RE=/^[A-Za-z0-9][A-Za-z0-9._-]{0,28}[A-Za-z0-9]$/;
 
 const ICON={
+ sheet:'<svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16l1.500 1.500L13 15"/></svg>',
  mark:'<svg viewBox="0 0 24 24"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.800 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
  today:'<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.300 2.700-5.500 6-5.500s6 2.200 6 5.500"/><path d="M16 11.500a3 3 0 1 0 0-6M18 20c0-2.300-.8-4-2.500-4.900"/></svg>',
  recs:'<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>',
@@ -20,19 +21,23 @@ const ICON={
  settings:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>',
  account:'<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.500"/><path d="M5 20c0-3.700 3-6 7-6s7 2.300 7 6"/></svg>'
 };
-const LABEL={mark:'Attendance',today:'Today',recs:'Records',team:'Team',settings:'Settings',account:'Account'};
+const LABEL={sheet:'Sheet',mark:'Attendance',today:'Today',recs:'Records',team:'Team',settings:'Settings',account:'Account'};
 
 const S={user:null,booting:true,fatal:'',cfg:{sites:[],blockOutside:false,mySiteId:null},todayKey:null,status:null,today:null,users:null,
   recs:null,recsLoading:false,tab:'mark',loginErr:'',setup:false,photos:{},photoAt:0,
   flt:{user:'',from:dkeyLocal(new Date(Date.now()-6*864e5)),to:dkeyLocal()},
   siteForm:{name:'',lat:'',lng:'',radius:150},
-  nu:{empCode:'',name:'',designation:'',role:'employee',siteId:''},bulk:{lines:'',siteId:''},purgeDays:90,exporting:false,sum:null,sumLoading:false,sumMonth:dkeyLocal().slice(0,7),bsh:{site:'',start:'08:00',end:'20:00'},graceEdit:null};
+  nu:{empCode:'',name:'',designation:'',role:'employee',siteId:''},bulk:{lines:'',siteId:''},purgeDays:90,exporting:false,sum:null,sumLoading:false,sumMonth:dkeyLocal().slice(0,7),bsh:{site:'',start:'08:00',end:'20:00'},graceEdit:null,pending:null,sheet:{mode:'day',date:null,day:null,loading:false,month:dkeyLocal().slice(0,7),grid:null,site:'',unmarked:false,fail:''}};
 let sb=null,sbTmp=null;
 const isAdmin=()=>S.user&&S.user.role==='admin';
 
 /* ---------- Supabase helpers ---------- */
 function friendly(e){
   const m=(e&&e.message)?String(e.message):String(e||'');
+  const mm=/MISSING_MARKS:(\d+)/.exec(m);if(mm)return 'Mark every day before submitting ('+mm[1]+' not marked yet).';
+  if(/SHEET_LOCKED/.test(m))return 'This month\'s sheet is submitted and locked. Ask admin to return it for corrections.';
+  if(/FUTURE_DATE/.test(m))return 'You cannot mark a future date.';
+  if(/NO_CHECKIN/.test(m))return 'Admins and field officers do not check in.';
   const o=/OUTSIDE_SITE:(\d+):(.*)/.exec(m);
   if(o)return 'You are outside your site ('+fmtDist(+o[1])+' from '+o[2]+'). Move to your site to mark attendance.';
   if(/ALREADY_IN/.test(m))return 'You are already checked in.';
@@ -83,7 +88,7 @@ async function signPhotos(rows){
 /* ---------- views ---------- */
 let raf=0;
 function draw(){cancelAnimationFrame(raf);raf=requestAnimationFrame(doDraw);}
-const tabsFor=()=>isAdmin()?['mark','today','recs','team','settings']:['mark','account'];
+const tabsFor=()=>isAdmin()?['today','sheet','recs','team','settings']:S.user.role==='field_officer'?['sheet','today','recs','account']:['mark','account'];
 function doDraw(){
   const app=$('#app'),nav=$('#nav');
   if(S.fatal){nav.hidden=true;app.innerHTML=`<div class="banner bad"><b>Setup needed.</b> ${esc(S.fatal)}</div>`;return;}
@@ -94,7 +99,7 @@ function doDraw(){
   const tabs=tabsFor();
   nav.hidden=false;
   $('#navIn').innerHTML=tabs.map(k=>`<button data-tab="${k}" aria-selected="${S.tab===k}">${ICON[k]}<span>${LABEL[k]}</span></button>`).join('');
-  const v={mark:viewMark,today:viewToday,recs:viewRecs,team:viewTeam,settings:viewSettings,account:viewAccount}[S.tab]||viewMark;
+  const v={sheet:viewSheet,mark:viewMark,today:viewToday,recs:viewRecs,team:viewTeam,settings:viewSettings,account:viewAccount}[S.tab]||viewMark;
   app.innerHTML=v();
   tick();
 }
@@ -145,7 +150,7 @@ function recRow(r,adminView){
   <span class="small muted">${adminView?fmtD(r.date)+' · ':''}${fmtT(i.t)} → ${o?fmtT(o.t)+' · '+fmtDur(i.t,o.t):'<b>on duty</b>'}</span>
   <div class="chips">${chipFor(i)}${o?chipFor(o):''}${r.manual?'<span class="chip warn">Closed by admin</span>':''}${r.lateMin>g?'<span class="chip warn">Late '+r.lateMin+'m</span>':''}${r.earlyMin>g?'<span class="chip warn">Left '+r.earlyMin+'m early</span>':''}${i.lat!=null?`<a class="map" href="${mapUrl(i)}" target="_blank" rel="noopener">Map ↗</a>`:''}</div>
   ${r.inNote?'<div class="small" style="margin-top:.3rem">📝 In: '+esc(r.inNote)+'</div>':''}${r.outNote?'<div class="small" style="margin-top:.2rem">📝 Out: '+esc(r.outNote)+'</div>':''}
-  ${adminView&&!o?`<button class="btn sm" style="margin-top:.4rem" data-closeid="${r.id}">${stale?'Close old shift':'Close shift'}</button>`:''}</div></div>`;
+  ${adminView&&isAdmin()&&!o?`<button class="btn sm" style="margin-top:.4rem" data-closeid="${r.id}">${stale?'Close old shift':'Close shift'}</button>`:''}</div></div>`;
 }
 function viewMark(){
   if(!S.status)return '<div class="card muted"><span class="spin"></span> Loading…</div>';
@@ -179,6 +184,7 @@ function viewToday(){
   let h=`<div class="stats"><div class="stat"><b>${list.length}</b><span>Total</span></div><div class="stat"><b>${c.on}</b><span>On duty</span></div><div class="stat"><b>${c.done}</b><span>Done</span></div><div class="stat"><b>${c.none}</b><span>Absent</span></div></div>
   <div class="card"><div class="row"><h3 class="grow" style="margin:0">Team today</h3><button class="btn sm" data-act="refresh">Refresh</button></div>`;
   if(!list.length)h+='<p class="muted">No employees yet. Add them in the Team tab.</p>';
+  if(S.pending&&S.pending.length)h=h.replace('<div class="card">',`<div class="banner warn">📋 The attendance sheet for <b>${esc(monthLabel(S.pending[0]))}</b> is waiting for your review. <button class="btn sm" data-openmonth="${esc(S.pending[0])}">Open</button></div><div class="card">`);
   if(od)h=h.replace('<div class="card">',`<div class="banner bad"><b>${od} not arrived</b> — past their shift start time.</div><div class="card">`);
   h+=list.map(p=>{
     const cls=p.status==='on'?'ok':p.status==='done'?'warn':'bad',txt=p.status==='on'?(p.stale?'Open shift':'On duty'):p.status==='done'?'Completed':'Not marked';
@@ -190,11 +196,11 @@ function viewToday(){
 function viewRecs(){
   const users=S.users||[];
   let h=`<div class="card"><h3>Attendance records</h3>
-  <label class="f" for="fu">Employee</label><select id="fu" data-flt="user"><option value="">All employees</option>${users.map(u=>`<option value="${esc(u.id)}" ${u.id===S.flt.user?'selected':''}>${esc(u.name)} (${esc(u.empCode)})</option>`).join('')}</select>
+  <label class="f" for="fu">Employee</label><select id="fu" data-flt="user"><option value="">All employees</option>${users.filter(u=>u.role==='employee').map(u=>`<option value="${esc(u.id)}" ${u.id===S.flt.user?'selected':''}>${esc(u.name)} (${esc(u.empCode)})</option>`).join('')}</select>
   <div class="row"><div class="grow"><label class="f" for="ff">From</label><input type="date" id="ff" data-flt="from" value="${S.flt.from}"></div><div class="grow"><label class="f" for="ft">To</label><input type="date" id="ft" data-flt="to" value="${S.flt.to}"></div></div>
   <div class="row" style="margin-top:.9rem"><button class="btn pri grow" data-act="search">Show records</button>
   <button class="btn grow" data-act="export" ${S.exporting?'disabled':''}>${S.exporting?'Preparing…':'⬇ Export CSV'}</button></div></div>`;
-  h+=summaryCard();
+  if(isAdmin())h+=summaryCard();
   h+='<div class="card"><h3>Results</h3>';
   if(S.recsLoading)h+='<p class="muted"><span class="spin"></span> Loading…</p>';
   else if(!S.recs)h+='<p class="muted">Choose filters and tap “Show records”.</p>';
@@ -220,7 +226,7 @@ function viewTeam(){
   <label class="f" for="nn">Full name</label><input id="nn" data-nu="name" value="${esc(S.nu.name)}">
   <label class="f" for="nd">Designation (optional)</label><input id="nd" data-nu="designation" value="${esc(S.nu.designation)}" placeholder="Security Guard">
   <div class="row"><div class="grow"><label class="f" for="ns">Assigned site</label><select id="ns" data-nu="siteId" ${S.nu.role==='field_officer'?'disabled':''}>${siteOpts(S.nu.siteId)}</select></div>
-  <div class="grow"><label class="f" for="nr">Role</label><select id="nr" data-nu="role"><option value="employee" ${S.nu.role==='employee'?'selected':''}>Employee</option><option value="field_officer" ${S.nu.role==='field_officer'?'selected':''}>Field officer (any site)</option><option value="admin" ${S.nu.role==='admin'?'selected':''}>Admin</option></select></div></div>
+  <div class="grow"><label class="f" for="nr">Role</label><select id="nr" data-nu="role"><option value="employee" ${S.nu.role==='employee'?'selected':''}>Employee</option><option value="field_officer" ${S.nu.role==='field_officer'?'selected':''}>Field officer (marks attendance)</option><option value="admin" ${S.nu.role==='admin'?'selected':''}>Admin</option></select></div></div>
   <button class="btn pri" style="width:100%;margin-top:.9rem" data-act="adduser">Create account</button><p class="formerr" id="nuErr"></p></div>
   <div class="card"><h3>Add many at once</h3><p class="muted small">One employee per line: <b>ID, Name, Designation</b>. Do about 20 at a time (the free service limits how fast accounts can be created).</p>
   <textarea data-bulk="lines" placeholder="PF1001, Ravi Kumar, Security Guard&#10;PF1002, Suresh N, Supervisor">${esc(S.bulk.lines)}</textarea>
@@ -400,7 +406,10 @@ async function loadStatus(){
     S.status={open,recent};
   }catch(e){toast(friendly(e));}
 }
-async function loadToday(){try{S.today=await rpc('pf_admin_today');S.todayKey=S.today.today;}catch(e){toast(friendly(e));}}
+async function loadToday(){
+  try{S.today=await rpc('pf_admin_today');S.todayKey=S.today.today;}catch(e){toast(friendly(e));}
+  if(isAdmin()){try{S.pending=await rpc('pf_sheet_pending');}catch(e){S.pending=null;}}
+}
 async function loadUsers(){try{S.users=(await qry(sb.from('profiles').select('*').order('name'))).map(mapProfile);}catch(e){toast(friendly(e));}}
 async function loadRecs(){
   S.recsLoading=true;S.recs=null;draw();
@@ -417,14 +426,19 @@ async function enterTab(t){
   S.tab=t;draw();window.scrollTo(0,0);
   if(t==='mark'){await Promise.all([loadStatus(),loadConfig()]);}
   if(t==='today')await loadToday();
+  if(t==='sheet')await (S.sheet.mode==='month'?loadSheetMonth():loadSheetDay());
   if(t==='recs'){if(!S.users)await loadUsers();if(!S.recs)loadRecs();}
   if(t==='team'){await Promise.all([loadUsers(),loadConfig()]);}
   draw();
 }
 async function afterLogin(){
-  S.tab='mark';S.status=null;S.today=null;S.users=null;S.recs=null;draw();
+  S.tab=isAdmin()?'today':S.user.role==='field_officer'?'sheet':'mark';
+  S.status=null;S.today=null;S.users=null;S.recs=null;S.pending=null;
+  S.sheet.day=null;S.sheet.grid=null;S.sheet.date=null;S.sheet.fail='';S.sheet.mode=isAdmin()?'month':'day';draw();
   if(S.user.mustChange)return;
-  await loadConfig();await loadStatus();draw();
+  await loadConfig();
+  if(S.user.role==='employee'){await loadStatus();draw();}
+  else await enterTab(S.tab);
 }
 async function startSession(authUser){
   const r=await sb.from('profiles').select('*').eq('id',authUser.id).maybeSingle();
@@ -500,6 +514,128 @@ async function purgePhotos(){
   S.photos={};toast(done.length+' photos deleted');
 }
 
+/* ---------- attendance sheet (field officer marks, admin approves) ---------- */
+const ST=[['present','Present','P'],['absent','Absent','A'],['half_day','Half day','HD'],['leave','Leave','L'],['weekly_off','Weekly off','WO'],['overtime','Overtime','OT']];
+const STNAME={},STCODE={};ST.forEach(x=>{STNAME[x[0]]=x[1];STCODE[x[0]]=x[2];});
+const STCLS={present:'ok',absent:'bad',half_day:'warn',leave:'',weekly_off:'',overtime:'ok'};
+function dateAdd(k,n){const d=new Date(k+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);}
+function eachDate(a,b,fn){for(let k=a;k<=b;k=dateAdd(k,1))fn(k);}
+function monthLabel(m){const p=m.split('-').map(Number);return new Date(p[0],p[1]-1,1).toLocaleDateString([], {month:'long',year:'numeric'});}
+function guardCounts(p,g){
+  const c={present:0,absent:0,half_day:0,leave:0,weekly_off:0,overtime:0,missing:0};
+  Object.keys(p.marks||{}).forEach(k=>{const s=p.marks[k];if(c[s]!=null)c[s]++;});
+  const from=p.created>g.from?p.created:g.from,to=g.today<g.to?g.today:g.to;
+  if(from<=to)eachDate(from,to,k=>{if(!(p.marks&&p.marks[k]))c.missing++;});
+  c.worked=c.present+c.overtime+0.5*c.half_day;
+  return c;
+}
+function sheetSummary(g){const rows=g.people.map(p=>({p:p,c:guardCounts(p,g)}));return {rows:rows,missing:rows.reduce((a,r)=>a+r.c.missing,0)};}
+
+function viewSheet(){
+  const sh=S.sheet;
+  const h=`<div class="row" style="margin-bottom:.8rem;flex-wrap:nowrap"><button class="btn grow ${sh.mode==='day'?'pri':''}" data-smode="day">Daily marking</button><button class="btn grow ${sh.mode==='month'?'pri':''}" data-smode="month">Month sheet</button></div>`;
+  if(sh.fail)return h+`<div class="banner bad">${esc(sh.fail)} <button class="btn sm" data-act="retrysheet">Try again</button></div>`;
+  return h+(sh.mode==='day'?viewSheetDay():viewSheetMonth());
+}
+function viewSheetDay(){
+  const sh=S.sheet,d=sh.day,adm=isAdmin();
+  let h=`<div class="card"><div class="row" style="flex-wrap:nowrap"><button class="btn sm" data-dshift="-1" aria-label="Previous day">‹</button><input type="date" class="grow" data-sdate="1" value="${esc(sh.date||'')}" max="${esc(S.todayKey||'')}" aria-label="Date"><button class="btn sm" data-dshift="1" aria-label="Next day">›</button><button class="btn sm" data-dshift="today">Today</button></div></div>`;
+  if(!d)return h+'<div class="card muted"><span class="spin"></span> Loading…</div>';
+  const locked=d.locked&&!adm,g=S.cfg.graceMin==null?10:S.cfg.graceMin;
+  const all=d.people,marked=all.filter(p=>p.status).length;
+  let list=all;
+  if(sh.site)list=list.filter(p=>sh.site==='__none'?!p.site:p.site===sh.site);
+  if(sh.unmarked)list=list.filter(p=>!p.status);
+  h+=`<div class="card"><div class="row"><b class="grow">Marked ${marked} of ${all.length}</b><button class="btn sm pri" data-act="fillci" ${locked?'disabled':''}>Fill from check-ins</button></div>
+  <p class="muted small" style="margin:.4rem 0 0">“Fill from check-ins” marks Present for everyone who checked in and has no mark yet. You can change any mark.</p>
+  <div class="row" style="margin-top:.7rem"><select class="grow" data-ssite="1" aria-label="Site filter" style="min-height:44px"><option value="">All sites</option>${S.cfg.sites.map(s=>`<option value="${esc(s.name)}" ${sh.site===s.name?'selected':''}>${esc(s.name)}</option>`).join('')}<option value="__none" ${sh.site==='__none'?'selected':''}>No site assigned</option></select>
+  <label class="row" style="gap:.4rem"><input type="checkbox" data-sunm="1" ${sh.unmarked?'checked':''}><span class="small">Not marked only</span></label></div></div>`;
+  if(locked)h+=`<div class="banner warn">This month's sheet is ${d.monthStatus==='approved'?'approved':'submitted'} and locked. Ask admin to return it if you need to change something.</div>`;
+  if(sh.loading)h+='<p class="muted"><span class="spin"></span> Refreshing…</p>';
+  if(!all.length)return h+'<div class="card muted">No employees yet.</div>';
+  if(!list.length)return h+'<div class="card muted">Nobody matches this filter.</div>';
+  h+=list.map(p=>{
+    const ev=p.inAt?`✓ In ${fmtT(p.inAt)}${p.lateMin>g?' · <b>Late '+p.lateMin+'m</b>':''}${p.outAt?' · Out '+fmtT(p.outAt):(p.open?' · <b>on duty</b>':'')}${p.inside===false?' · <span class="chip bad">Off site</span>':''}`:'<span class="muted">No check-in</span>';
+    return `<div class="card" style="padding:.8rem"><div class="row" style="flex-wrap:nowrap;gap:.6rem"><div class="avatar">${esc((p.name||'?')[0].toUpperCase())}</div>
+    <div class="grow" style="min-width:0"><b>${esc(p.name)}</b><div class="small muted">${esc(p.empCode)}${p.site?' · '+esc(p.site):''}${p.shiftStart?' · 🕒 '+p.shiftStart+'–'+p.shiftEnd:''}</div></div>
+    <div class="thumbs">${p.inPhoto?thumb({photo:p.inPhoto,t:p.inAt},'IN',p.name):''}${p.outPhoto?thumb({photo:p.outPhoto,t:p.outAt},'OUT',p.name):''}</div></div>
+    <div class="small" style="margin-top:.45rem">${ev}</div>
+    <div class="stgrid">${ST.map(x=>`<button class="stb ${x[0]}${p.status===x[0]?' on':''}" data-st="${esc(p.id)}|${x[0]}" aria-pressed="${p.status===x[0]}" ${locked?'disabled':''}>${x[1]}</button>`).join('')}</div></div>`;
+  }).join('');
+  return h;
+}
+function viewSheetMonth(){
+  const sh=S.sheet,g=sh.grid,adm=isAdmin(),isFO=S.user.role==='field_officer';
+  let h=`<div class="card"><label class="f" for="sm2" style="margin-top:0">Month</label><input type="month" id="sm2" data-smonth="1" value="${esc(sh.month)}" max="${esc((S.todayKey||dkeyLocal()).slice(0,7))}"></div>`;
+  if(!g)return h+'<div class="card muted"><span class="spin"></span> Loading…</div>';
+  const sum=sheetSummary(g),st=g.sheet.status,sd=g.sheet;
+  const txt={open:'Open',submitted:'Submitted',approved:'Approved',returned:'Returned'}[st],cls={open:'',submitted:'warn',approved:'ok',returned:'bad'}[st];
+  const when=t=>t?new Date(t).toLocaleString():'';
+  let b=`<div class="card"><div class="row"><h3 class="grow" style="margin:0">${esc(monthLabel(g.month))}</h3><span class="chip ${cls}">${txt}</span></div>`;
+  if(st==='open')b+='<p class="small muted">Mark every day in “Daily marking”, then submit this sheet to admin.</p>';
+  if(st==='submitted')b+=`<p class="small muted">Submitted by ${esc(sd.submittedBy||'field officer')} on ${esc(when(sd.submittedAt))}.${sd.officerNote?' Note: “'+esc(sd.officerNote)+'”':''}</p>`;
+  if(st==='approved')b+=`<p class="small muted">Approved${sd.reviewedBy?' by '+esc(sd.reviewedBy):''} on ${esc(when(sd.reviewedAt))}.${sd.adminNote?' Note: “'+esc(sd.adminNote)+'”':''}</p>`;
+  if(st==='returned')b+=`<p class="small muted">Returned by admin${sd.adminNote?': “'+esc(sd.adminNote)+'”':'.'} Make the corrections, then submit again.</p>`;
+  if(sum.missing>0&&(st==='open'||st==='returned'))b+=`<p class="small" style="color:var(--bad)">${sum.missing} day${sum.missing===1?'':'s'} not marked yet. Every day must be marked before submitting.</p>`;
+  b+='<div class="row" style="margin-top:.6rem">';
+  if(isFO&&(st==='open'||st==='returned'))b+=`<button class="btn pri grow" data-act="submitsheet" ${sum.missing>0?'disabled':''}>Submit to admin</button>`;
+  if(adm&&st==='submitted')b+='<button class="btn pri grow" data-act="approvesheet">Approve</button><button class="btn grow bad" data-act="returnsheet">Return</button>';
+  if(adm&&st==='approved')b+='<button class="btn grow bad" data-act="returnsheet">Reopen for corrections</button>';
+  b+='<button class="btn grow" data-act="exportsheet">⬇ Download CSV</button></div></div>';
+  h+=b;
+  h+=`<div class="card"><h3>Summary</h3><p class="muted small">P present · OT overtime · HD half day · L leave · WO weekly off · A absent · Worked = P + OT + ½ HD. Tap a name to see the days.</p><div style="overflow-x:auto"><table class="t"><tr><th>Name</th><th>P</th><th>OT</th><th>HD</th><th>L</th><th>WO</th><th>A</th><th>Not marked</th><th>Worked</th></tr>`+
+    (sum.rows.length?sum.rows.map(r=>`<tr data-gdrill="${esc(r.p.id)}" style="cursor:pointer"><td>${esc(r.p.name)}<div class="small muted">${esc(r.p.empCode)}</div></td><td>${r.c.present}</td><td>${r.c.overtime}</td><td>${r.c.half_day}</td><td>${r.c.leave}</td><td>${r.c.weekly_off}</td><td>${r.c.absent}</td><td>${r.c.missing?'<b style="color:var(--bad)">'+r.c.missing+'</b>':'0'}</td><td>${r.c.worked}</td></tr>`).join(''):'<tr><td colspan="9" class="muted">No employees yet.</td></tr>')+'</table></div></div>';
+  return h;
+}
+function openDrill(uid){
+  const g=S.sheet.grid,p=g&&g.people.find(x=>x.id===uid);if(!p)return;
+  const to=g.today<g.to?g.today:g.to;let rows='';
+  eachDate(g.from,to,k=>{const s=p.marks[k],ci=p.ci.indexOf(k)>=0;
+    rows+=`<button class="emp" data-gojump="${k}"><div class="grow"><b>${fmtD(k)}</b></div>${ci?'<span class="chip ok" style="margin-right:.4rem">Checked in</span>':''}<span class="chip ${s?STCLS[s]:'bad'}">${s?STNAME[s]:'Not marked'}</span></button>`;});
+  openModal(`<h3>${esc(p.name)}</h3><p class="muted small">${esc(p.empCode)} · tap a day to open it for editing</p>${rows||'<p class="muted">No days yet.</p>'}<button class="btn pri" style="width:100%;margin-top:.8rem" data-mclose>Close</button>`);
+}
+async function loadSheetDay(){
+  const sh=S.sheet;if(!sh.date)sh.date=S.todayKey||dkeyLocal();
+  sh.loading=true;sh.fail='';draw();
+  try{
+    const d=await rpc('pf_sheet_day',{p_date:sh.date});
+    await signPhotos(d.people.map(p=>({checkIn:p.inPhoto?{photo:p.inPhoto}:null,checkOut:p.outPhoto?{photo:p.outPhoto}:null})));
+    sh.day=d;S.todayKey=d.today;
+  }catch(e){sh.fail='Could not load: '+friendly(e);}
+  sh.loading=false;draw();
+}
+async function loadSheetMonth(){
+  const sh=S.sheet;sh.grid=null;sh.fail='';draw();
+  try{sh.grid=await rpc('pf_sheet_month',{p_month:sh.month});S.todayKey=sh.grid.today;}catch(e){sh.fail='Could not load: '+friendly(e);}
+  draw();
+}
+async function setMark(uid,st){
+  const d=S.sheet.day,p=d&&d.people.find(x=>x.id===uid);if(!p)return;
+  const prev=p.status||null,next=prev===st?null:st;
+  p.status=next;S.sheet.grid=null;draw();
+  try{await rpc('pf_set_marks',{p_date:S.sheet.date,p_items:[{u:uid,s:next}]});}
+  catch(e){p.status=prev;draw();toast(friendly(e));}
+}
+async function fillFromCheckins(){
+  const d=S.sheet.day;if(!d)return;
+  const items=d.people.filter(p=>!p.status&&p.inAt).map(p=>({u:p.id,s:'present'}));
+  if(!items.length){toast('Nothing to fill: everyone who checked in is already marked');return;}
+  await rpc('pf_set_marks',{p_date:S.sheet.date,p_items:items});
+  items.forEach(i=>{const p=d.people.find(x=>x.id===i.u);if(p)p.status='present';});
+  S.sheet.grid=null;draw();toast(items.length+' marked Present from check-ins');
+}
+function exportSheet(){
+  const g=S.sheet.grid;if(!g)return;
+  const days=[];eachDate(g.from,g.to,k=>days.push(k));
+  const rows=[['Attendance sheet',g.month,'Status',g.sheet.status],[],
+    ['Employee ID','Name','Site'].concat(days.map(k=>+k.slice(8))).concat(['Present','Overtime','Half day','Leave','Weekly off','Absent','Not marked','Days worked'])];
+  g.people.forEach(p=>{const c=guardCounts(p,g);
+    rows.push([p.empCode,p.name,p.site||''].concat(days.map(k=>STCODE[p.marks[k]]||'')).concat([c.present,c.overtime,c.half_day,c.leave,c.weekly_off,c.absent,c.missing,c.worked]));});
+  rows.push([],['Codes: P present, OT overtime, HD half day, L leave, WO weekly off, A absent']);
+  const csv='\ufeff'+rows.map(r=>r.map(v=>{v=v==null?'':String(v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;}).join(',')).join('\n');
+  downloadBlob(new Blob([csv],{type:'text/csv'}),'attendance_sheet_'+g.month+'.csv');
+}
+
 /* ---------- events ---------- */
 document.addEventListener('submit',async e=>{
   e.preventDefault();
@@ -539,7 +675,7 @@ document.addEventListener('submit',async e=>{
   }catch(err){toast(friendly(err));}
 });
 document.addEventListener('click',async e=>{
-  const t=e.target.closest('[data-tab],[data-act],[data-emp],[data-lb],[data-delsite],[data-reset],[data-toggle],[data-closeid],[data-dlcsv],[data-shift]');
+  const t=e.target.closest('[data-tab],[data-act],[data-emp],[data-lb],[data-delsite],[data-reset],[data-toggle],[data-closeid],[data-dlcsv],[data-shift],[data-st],[data-smode],[data-dshift],[data-gdrill],[data-gojump],[data-openmonth]');
   if(!t)return;
   const d=t.dataset;
   try{
@@ -552,6 +688,12 @@ document.addEventListener('click',async e=>{
       <label class="f" for="shs">Starts</label><input type="time" id="shs" value="${u.shiftStart||'08:00'}">
       <label class="f" for="she">Ends</label><input type="time" id="she" value="${u.shiftEnd||'20:00'}">
       <p class="formerr" id="shErr2"></p><div class="row" style="margin-top:.6rem"><button class="btn grow" data-act="clearshift" data-id="${esc(u.id)}">No shift</button><button class="btn pri grow" data-act="saveshift" data-id="${esc(u.id)}">Save</button></div>`);return;}
+    if(d.st){const q=d.st.split('|');await setMark(q[0],q[1]);return;}
+    if(d.smode){S.sheet.mode=d.smode;S.sheet.fail='';draw();await (d.smode==='month'?loadSheetMonth():loadSheetDay());return;}
+    if(d.dshift){const sh=S.sheet,cur=sh.date||S.todayKey||dkeyLocal();let nd=d.dshift==='today'?(S.todayKey||dkeyLocal()):dateAdd(cur,+d.dshift);if(S.todayKey&&nd>S.todayKey)nd=S.todayKey;sh.date=nd;await loadSheetDay();return;}
+    if(d.gdrill){openDrill(d.gdrill);return;}
+    if(d.gojump){closeModal();S.sheet.date=d.gojump;S.sheet.mode='day';S.sheet.day=null;await enterTab('sheet');return;}
+    if(d.openmonth){S.sheet.month=d.openmonth;S.sheet.mode='month';S.sheet.grid=null;await enterTab('sheet');return;}
     if(d.delsite){if(!confirm('Remove this site?'))return;await rpc('pf_admin_site_delete',{p_id:+d.delsite});await loadConfig();draw();return;}
     if(d.reset){
       if(!confirm('Reset this employee\'s password? They will be signed out.'))return;
@@ -579,6 +721,31 @@ document.addEventListener('click',async e=>{
     else if(a==='search')loadRecs();
     else if(a==='export')exportCsv();
     else if(a==='purge')await purgePhotos();
+    else if(a==='fillci')await fillFromCheckins();
+    else if(a==='retrysheet'){S.sheet.fail='';await (S.sheet.mode==='month'?loadSheetMonth():loadSheetDay());}
+    else if(a==='exportsheet')exportSheet();
+    else if(a==='submitsheet'){
+      openModal(`<h3>Submit ${esc(monthLabel(S.sheet.month))}</h3><p class="muted small">After you submit, this sheet is locked until admin returns it.</p>
+      <label class="f" for="snote">Note to admin (optional)</label><textarea id="snote" maxlength="500"></textarea><p class="formerr" id="snErr"></p>
+      <div class="row" style="margin-top:.6rem"><button class="btn grow" data-mclose>Cancel</button><button class="btn pri grow" data-act="dosubmit">Submit</button></div>`);
+    }
+    else if(a==='dosubmit'){
+      try{await rpc('pf_sheet_submit',{p_month:S.sheet.month,p_note:($('#snote').value||'').trim()||null});closeModal();toast('Sheet submitted to admin');await loadSheetMonth();}
+      catch(x){$('#snErr').textContent=friendly(x);}
+    }
+    else if(a==='approvesheet'){
+      if(!confirm('Approve the sheet for '+monthLabel(S.sheet.month)+'?'))return;
+      await rpc('pf_sheet_review',{p_month:S.sheet.month,p_action:'approve',p_note:null});toast('Sheet approved');await loadSheetMonth();
+    }
+    else if(a==='returnsheet'){
+      openModal(`<h3>Return for corrections</h3><p class="muted small">The field officer can edit and submit again.</p>
+      <label class="f" for="rnote">What should be corrected? (optional)</label><textarea id="rnote" maxlength="500"></textarea><p class="formerr" id="rnErr"></p>
+      <div class="row" style="margin-top:.6rem"><button class="btn grow" data-mclose>Cancel</button><button class="btn pri grow" data-act="doreturn">Return sheet</button></div>`);
+    }
+    else if(a==='doreturn'){
+      try{await rpc('pf_sheet_review',{p_month:S.sheet.month,p_action:'return',p_note:($('#rnote').value||'').trim()||null});closeModal();toast('Sheet returned');await loadSheetMonth();}
+      catch(x){$('#rnErr').textContent=friendly(x);}
+    }
     else if(a==='sumshow')await loadSummary();
     else if(a==='sumcsv')sumCsv();
     else if(a==='saveshift'){
@@ -661,6 +828,10 @@ document.addEventListener('input',e=>{
 document.addEventListener('change',async e=>{
   const t=e.target,d=t.dataset;
   try{
+    if(d.sdate){if(t.value){S.sheet.date=t.value;await loadSheetDay();}}
+    if(d.smonth){if(t.value){S.sheet.month=t.value;await loadSheetMonth();}}
+    if(d.ssite!=null){S.sheet.site=t.value;draw();}
+    if(d.sunm!=null){S.sheet.unmarked=t.checked;draw();}
     if(t.id==='blk'){await rpc('pf_admin_set_block',{p_block:t.checked});S.cfg.blockOutside=t.checked;toast(t.checked?'Check-in blocked off site':'Off-site check-in allowed');}
     if(d.nu==='role'){if(t.value==='field_officer')S.nu.siteId='';draw();}
     if(d.urole){await rpc('pf_admin_set_role',{p_user:d.urole,p_role:t.value});await loadUsers();draw();toast('Role updated');}
@@ -680,6 +851,7 @@ document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='visible'&&S.user&&!S.user.mustChange&&$('#sheet').hidden){
     if(S.tab==='mark')Promise.all([loadConfig(),loadStatus()]).then(draw);
     if(S.tab==='today')loadToday().then(draw);
+    if(S.tab==='sheet'&&S.sheet.mode==='day'&&S.sheet.day&&!S.sheet.loading)loadSheetDay();
   }
 });
 
